@@ -117,7 +117,7 @@ dependencies, no companion app.
 
 ## Verify it worked
 
-Open BetterDiscord → Plugins → **RTX HDR Guard** → gear icon. The panel shows:
+Open BetterDiscord → Plugins → **RTX HDR Guard** → gear icon. Sample panel output:
 
 ```text
 In-process hook: off · Out-of-process: on
