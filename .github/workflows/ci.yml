@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Syntax + behaviour checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: node --check
+        run: node --check RTXHDRGuard.plugin.js
+      - name: Behaviour checks against mocked Discord modules
+        run: node test/plugin.test.js
+      - name: Plugin metadata is present
+        run: |
+          for key in '@name' '@author' '@description' '@version'; do
+            grep -q "$key" RTXHDRGuard.plugin.js || { echo "missing $key in plugin header"; exit 1; }
+          done
