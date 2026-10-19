@@ -4,17 +4,17 @@
 
 <h1 align="center">RTX HDR Guard</h1>
 
-<p align="center"><strong>A BetterDiscord plugin that stops Discord's overlay from killing RTX HDR.</strong></p>
+<p align="center"><strong>A BetterDiscord plugin that keeps Discord's game overlay switched off so RTX HDR never drops.</strong></p>
 
 <p align="center">
-  Discord's in-process overlay hooks your game's DXGI swapchain.<br>
-  RTX HDR converts that same frame. Only one of them wins.
+  Both of Discord's overlay implementations take the game's presented frame away from the driver.<br>
+  There is no overlay mode that keeps RTX HDR alive — this plugin keeps the overlay off, and keeps it off.
 </p>
 
 <p align="center">
   <a href="https://github.com/SenjuWoo/rtxhdr-guard/actions/workflows/ci.yml"><img src="https://github.com/SenjuWoo/rtxhdr-guard/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-ff3ea5?labelColor=0d0f11" alt="MIT License"></a>
-  <a href="https://github.com/SenjuWoo/rtxhdr-guard/releases/tag/v1.0.0"><img src="https://img.shields.io/badge/release-v1.0.0-8f9aa6?labelColor=0d0f11" alt="v1.0.0"></a>
+  <a href="https://github.com/SenjuWoo/rtxhdr-guard/releases/latest"><img src="https://img.shields.io/badge/release-v1.1.0-8f9aa6?labelColor=0d0f11" alt="v1.1.0"></a>
   <img src="https://img.shields.io/badge/BetterDiscord-1.14%2B-5865f2?labelColor=0d0f11" alt="BetterDiscord 1.14+">
   <img src="https://img.shields.io/badge/platform-Windows-8f9aa6?labelColor=0d0f11" alt="Windows">
 </p>
@@ -22,7 +22,7 @@
 <p align="center">
   <a href="#the-problem">Problem</a>
   ·
-  <a href="#what-discord-actually-allows">The wall</a>
+  <a href="#evidence-from-a-real-session">Evidence</a>
   ·
   <a href="#what-the-plugin-does">What it does</a>
   ·
@@ -35,69 +35,58 @@
 
 ## The problem
 
-RTX HDR is a driver-level SDR→HDR pass applied to the frame your game presents. Discord's
-**in-process** overlay (`discord_hook`) injects into the game and hooks `IDXGISwapChain::Present`,
-so the driver stops converting and the image goes flat — usually until the game is restarted.
+RTX HDR is a driver-level SDR→HDR pass applied to the frame your game presents. Discord's overlay
+takes that frame away from the driver, and HDR stays off — usually until the game is restarted.
 
-Straight from `%APPDATA%\discord\logs\discord_hook.log`:
+Discord has two overlay implementations, and **both break it**:
+
+| Implementation | What it does to the game |
+|---|---|
+| in-process **Hook** (`discord_hook`) | injects into the game and hooks `IDXGISwapChain::Present` |
+| **out-of-process (V3)** window | a separate always-on-top window composites over the game |
+
+`OverlayRenderStore` picks between them per fullscreen type: exclusive `FULLSCREEN` forces the Hook
+(out-of-process is only allowed for `WINDOWED` / `MAXIMIZED` / `BORDERLESS_FULLSCREEN`), borderless
+gets the OOP window. Either way a Discord surface ends up over the game.
+
+## Evidence from a real session
+
+From `%APPDATA%\discord\logs\renderer_js.log` and `discord_hook.log` on the machine this was
+written for, 2026-10-19, Risk of Rain 2 (borderless — no `discord_hook` injection was logged at all):
 
 ```text
-Starting graphics hook in process ...\PlateUp.exe
-Hooked DXGI
-Hooked OpenGL
-Color space tracked at CDXGISwapChain+168
+14:50:47  [RunningGameStore] Running Games Changed  → Risk of Rain 2 tracked
+14:50:50  [PopoutWindowStore] Opening popout window  → OOP overlay appears
+14:51:20  [OverlayV3Store] Focused new PID 10356     → overlay on the game, RTX HDR off
+14:55:10  [OverlayRenderStore] handleOverlaySetEnabled → plugin applies
+14:55:10  [PopoutWindowStore] Unmounting popout window DISCORD_OutOfProcessOverlay
+14:55:28  same game session (52a93325…) continues — overlay never comes back
 ```
 
-A webcam tile, a notification, the overlay drawing anything at all — that's enough to flip RTX HDR
-off mid-session.
-
-## What Discord actually allows
-
-Discord has two overlay implementations: the in-process **Hook** and an **out-of-process (V3)**
-window that never touches the game's swapchain. `OverlayRenderStore` picks between them per
-fullscreen type (read out of the Discord 1.0.9262 bundle):
-
-| Game window | Overlay method | Hooks the game? |
-|---|---|---|
-| `FULLSCREEN` (exclusive) | in-process Hook only | yes → kills RTX HDR |
-| `BORDERLESS_FULLSCREEN` | out-of-process window | no |
-| `WINDOWED` / `MAXIMIZED` | out-of-process window | no |
-| `UNKNOWN` / `MINIMIZED` | overlay disabled | — |
-
-The fullscreen branch of the method decider is literally:
-
-```js
-case aI.FULLSCREEN: {
-  let e = (0, N.O4)(n), t = e.enabledLegacy && b;
-  return { ...e, overlayMethod: t ? e.overlayMethod : m.Ue.Disabled };
-}
-```
-
-There is no out-of-process option for exclusive fullscreen. That's the wall: **you cannot have the
-overlay over exclusive fullscreen without the hook**, and the hook is what breaks RTX HDR.
+The overlay was the out-of-process window, not the hook, and it still killed HDR. The plugin did
+remove the overlay at 14:55:10 — but the game kept the broken HDR state, because RTX HDR does not
+re-engage until the game restarts.
 
 ## What the plugin does
 
-It removes the hook from the equation instead of fighting it:
+It removes the variable instead of chasing it:
 
-- forces the two global overlay switches in Discord's local `OverlayStore6` store —
-  `legacyEnabled: false`, `oopEnabled: true`;
-- dispatches `OVERLAY_SET_ENABLED`, the same action Discord's own overlay toggle fires, which
-  persists the change and **retracks running games** so it applies without a game restart;
-- re-applies at every Discord start, before any game is tracked;
-- restores your previous values when you disable the plugin (unless you changed them yourself in
-  the meantime);
-- exposes a settings panel with the live state and what Discord actually decided per running game.
+- forces both overlay switches in Discord's local `OverlayStore6` store to `false`
+  (`legacyEnabled: false`, `oopEnabled: false`) — no hook, no overlay window;
+- dispatches `OVERLAY_SET_ENABLED`, the action Discord's own overlay toggle fires, which persists
+  the change and **retracks running games**;
+- **reverts drift**: Discord's UI toggle sets both switches back to `true`, so the plugin subscribes
+  to that action and re-applies itself. That was the real failure in the first test — the guard had
+  applied at 02:50, something turned the overlay back on, and the plugin never noticed;
+- restores your previous values when you disable the plugin (unless you changed them yourself).
 
 Result:
 
-| You run the game | Overlay | RTX HDR |
-|---|---|---|
-| Exclusive fullscreen | not shown (Discord disables it there) | **stays on** |
-| Borderless fullscreen / windowed | normal overlay, out-of-process | stays on, swapchain untouched |
-
-If you want the webcam overlay *and* HDR at the same time, play borderless. That is the only
-combination Discord supports.
+| You want | Do this |
+|---|---|
+| RTX HDR stays on | leave the plugin enabled — Discord never draws over a game |
+| Discord's overlay on top of the game | disable the plugin; RTX HDR will drop again when it appears |
+| Both | not possible on one display. A window that doesn't overlap the game (second monitor) is the only way |
 
 ## Install
 
@@ -120,13 +109,16 @@ dependencies, no companion app.
 Open BetterDiscord → Plugins → **RTX HDR Guard** → gear icon. Sample panel output:
 
 ```text
-In-process hook: off · Out-of-process: on
-PlateUp [4242] — Out of Process, legacy=false, oop=true
+In-process hook: off · Out-of-process: off
+Risk of Rain 2 [10356] — Disabled, legacy=false, oop=false
 ```
 
-`Hook` there means the game is still being injected — press **Apply now**, or restart the game.
-Independent proof: `%APPDATA%\discord\logs\discord_hook.log` should stop printing
-`Starting graphics hook in process` for that game.
+Green means both paths are off. `Hook` or `Out of Process` in the game line means Discord is still
+drawing over that game — press **Apply now**, and restart the game if HDR is already broken.
+
+Independent proof: `%APPDATA%\discord\logs\discord_hook.log` stops printing
+`Starting graphics hook in process`, and no `Opening popout window … DISCORD_OutOfProcessOverlay`
+appears while a game is focused.
 
 ## How it finds Discord's internals
 
@@ -150,12 +142,11 @@ silently doing nothing, and the plugin logs it under `RTXHDRGuard` in the Better
   of that build's bundle.
 - **Tested:** `test/plugin.test.js` runs 9 assertions against mock modules built from the real
   bundle shapes — module discovery through nested exports, dispatch payload, idempotency, the
-  boot-order race where Discord hasn't registered its handler yet, restore-on-disable, panel
-  rendering. CI runs it on every push.
-- **Not tested:** a live Discord session inside this repo's CI (it needs a running Discord client
-  and a game). The panel and `discord_hook.log` are the verification surface for that.
-- **Known limit:** exclusive fullscreen loses the overlay entirely. That is Discord's design, not a
-  bug here.
+  boot-order race where Discord hasn't registered its handler yet, drift revert from inside the
+  dispatch, restore-on-disable, panel rendering. CI runs it on every push.
+- **Not tested:** a live Discord session inside CI (it needs a running client and a game). The
+  panel and `discord_hook.log` are the verification surface for that.
+- **Known limit:** the overlay is off. That is the point — there is no configuration that keeps both.
 
 ## Changelog
 
