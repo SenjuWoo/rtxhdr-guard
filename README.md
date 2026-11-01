@@ -14,7 +14,7 @@
 <p align="center">
   <a href="https://github.com/SenjuWoo/rtxhdr-guard/actions/workflows/ci.yml"><img src="https://github.com/SenjuWoo/rtxhdr-guard/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-ff3ea5?labelColor=0d0f11" alt="MIT License"></a>
-  <a href="https://github.com/SenjuWoo/rtxhdr-guard/releases/latest"><img src="https://img.shields.io/badge/release-v1.1.0-8f9aa6?labelColor=0d0f11" alt="v1.1.0"></a>
+  <a href="https://github.com/SenjuWoo/rtxhdr-guard/releases/latest"><img src="https://img.shields.io/github/v/release/SenjuWoo/rtxhdr-guard?label=release&color=8f9aa6" alt="latest release"></a>
   <img src="https://img.shields.io/badge/BetterDiscord-1.14%2B-5865f2?labelColor=0d0f11" alt="BetterDiscord 1.14+">
   <img src="https://img.shields.io/badge/platform-Windows-8f9aa6?labelColor=0d0f11" alt="Windows">
 </p>
