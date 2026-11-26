@@ -1,5 +1,5 @@
 /*
- * Behaviour checks for RTXHDRGuard 1.1.0.
+ * Behaviour checks for RTXHDRGuard 1.1.1.
  *
  * No Discord here, so BdApi is stubbed with module shapes taken from the real Discord 1.0.9262
  * bundle (OverlayStore6 class, Dispatcher, RunningGameStore, OverlayRenderStore,
@@ -120,9 +120,12 @@ global.BdApi = {
     },
     Logger: { info() {}, error() {}, warn() {} },
     UI: { showToast: (text, opts) => toasts.push({ text, type: opts?.type }) },
+    // BetterDiscord 1.14's Data API is save/load/delete and nothing else. 1.1.0 called setData/getData,
+    // which this stub used to offer, so the test passed while restore-on-disable never ran in BD.
     Data: {
-        setData: (plugin, key, value) => { data[`${plugin}.${key}`] = value; },
-        getData: (plugin, key) => data[`${plugin}.${key}`],
+        save: (plugin, key, value) => { data[`${plugin}.${key}`] = value; },
+        load: (plugin, key) => data[`${plugin}.${key}`],
+        delete: (plugin, key) => { delete data[`${plugin}.${key}`]; },
     },
 };
 
@@ -138,15 +141,19 @@ global.setInterval = () => 0;
 /* ---------- load the plugin exactly as BetterDiscord does ---------- */
 
 const Plugin = require(path.join(__dirname, "..", "RTXHDRGuard.plugin.js"));
-const plugin = new Plugin({ name: "RTXHDRGuard", version: "1.1.0" });
+const plugin = new Plugin({ name: "RTXHDRGuard", version: "1.1.1" });
 
 /* ---------- assertions ---------- */
+
+let passed = 0;
+const ok = (label) => console.log(`ok ${++passed} - ${label}`);
 
 // 1. Lookups find the right modules (including the nested {x: class} export), not the decoys.
 assert.strictEqual(plugin.store(), OverlayStore, "store lookup through nested export");
 assert.strictEqual(plugin.games(), runningGames, "running games lookup");
 assert.strictEqual(plugin.render(), overlayRenderStore, "render store lookup");
 assert.strictEqual(plugin.labels(), overlayRenderUtils, "label utils lookup");
+ok("lookups find the overlay store (nested export), games, render store, labels; no decoys");
 
 // 2. Boot-order race: Discord's overlay store hasn't registered OVERLAY_SET_ENABLED yet.
 handlersRegistered = false;
@@ -155,6 +162,7 @@ assert.strictEqual(OverlayStore.legacyEnabled, false, "persisted even with no ha
 assert.strictEqual(OverlayStore.oopEnabled, false, "oop persisted even with no handler");
 handlersRegistered = true;
 assert.strictEqual(subscribers.length, 1, "subscribed to OVERLAY_SET_ENABLED");
+ok("boot-order race: both switches persist before Discord registers its handler");
 
 // 3. Normal apply switches both paths off with the real action name and payload.
 OverlayStore.update({ legacyEnabled: true, oopEnabled: true });
@@ -165,12 +173,14 @@ assert.deepStrictEqual(actions, [{ type: "OVERLAY_SET_ENABLED", legacyEnabled: f
 assert.strictEqual(OverlayStore.legacyEnabled, false, "legacy off");
 assert.strictEqual(OverlayStore.oopEnabled, false, "oop off");
 assert.strictEqual(toasts.at(-1).type, "success", "success toast");
+ok("apply dispatches OVERLAY_SET_ENABLED with legacyEnabled=false, oopEnabled=false");
 
 // 4. Idempotent: a second start must not dispatch or toast again.
 const count = actions.length, toastCount = toasts.length;
 plugin.start();
 assert.strictEqual(actions.length, count, "no duplicate dispatch");
 assert.strictEqual(toasts.length, toastCount, "no duplicate toast");
+ok("a second start is idempotent: no extra dispatch, no extra toast");
 
 // 5. Drift: something re-enables the overlay (Discord's UI toggle) -> guard reverts it, from
 //    inside the dispatch, without recursing forever.
@@ -178,11 +188,13 @@ dispatcher.dispatch({ type: "OVERLAY_SET_ENABLED", legacyEnabled: true, oopEnabl
 assert.strictEqual(OverlayStore.legacyEnabled, false, "drift reverted (legacy)");
 assert.strictEqual(OverlayStore.oopEnabled, false, "drift reverted (oop)");
 assert.strictEqual(actions.filter(a => a.legacyEnabled === false).length >= 2, true, "revert dispatched");
+ok("drift: an outside OVERLAY_SET_ENABLED(true) is reverted from inside the dispatch");
 
 // 6. Forced apply (the panel's "Apply now") re-dispatches even when already safe.
 const beforeForce = actions.length;
 plugin.apply(false, true);
 assert.strictEqual(actions.length, beforeForce + 1, "force dispatches");
+ok("Apply now re-dispatches even when already safe");
 
 // 7. stop() restores the user's original pair and unsubscribes.
 plugin.stop();
@@ -192,6 +204,7 @@ assert.strictEqual(OverlayStore.oopEnabled, true, "oop restored");
 const afterStop = actions.length;
 dispatcher.dispatch({ type: "OVERLAY_SET_ENABLED", legacyEnabled: true, oopEnabled: true });
 assert.strictEqual(actions.length, afterStop + 1, "no guard reaction after stop");
+ok("disable restores the saved overlay pair and unsubscribes");
 
 // 8. Panel builds and renders live state.
 const panel = plugin.getSettingsPanel();
@@ -200,6 +213,7 @@ const [title, state, list] = panel.kids;
 assert.strictEqual(title.textContent, "RTX HDR guard");
 assert.ok(state.textContent.includes("ON (breaks RTX HDR)"), `state line: ${state.textContent}`);
 assert.ok(list.textContent.includes("PlateUp [4242] — Disabled"), `games line: ${list.textContent}`);
+ok("settings panel renders the live switch state and each running game");
 
 // 9. Panel goes green once the guard is applied.
 plugin.apply(true);
@@ -207,6 +221,20 @@ const panel2 = plugin.getSettingsPanel();
 assert.ok(panel2.kids[1].textContent.includes("In-process hook: off"), `after apply: ${panel2.kids[1].textContent}`);
 assert.ok(panel2.kids[1].textContent.includes("Out-of-process: off"), `after apply: ${panel2.kids[1].textContent}`);
 assert.ok(panel2.kids[1].style.color.includes("text-positive"), "green when safe");
+ok("panel turns green once both switches are off");
+
+// 10. The saved pair is used once. After a disable has restored it, the user switches the overlay off
+//     themselves; enabling and disabling the plugin again must leave it off, not revive the old value.
+plugin.stop();
+assert.strictEqual(OverlayStore.legacyEnabled, true, "second restore (legacy)");
+assert.strictEqual(OverlayStore.oopEnabled, true, "second restore (oop)");
+assert.strictEqual(data["RTXHDRGuard.previous"], undefined, "saved pair cleared after restore");
+OverlayStore.update({ legacyEnabled: false, oopEnabled: false });
+plugin.start();
+plugin.stop();
+assert.strictEqual(OverlayStore.legacyEnabled, false, "user's own off kept (legacy)");
+assert.strictEqual(OverlayStore.oopEnabled, false, "user's own off kept (oop)");
+ok("a restored pair is forgotten, so a later disable keeps the user's own choice");
 
 global.setInterval = realSetInterval;
-console.log("all checks passed");
+console.log(`all ${passed} checks passed`);

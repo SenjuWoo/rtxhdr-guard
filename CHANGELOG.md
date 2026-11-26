@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.1.1 — 2026-11-25
+
+**Disabling the plugin now really gives your overlay settings back.**
+
+- 1.1.0 saved and read your previous overlay values with `BdApi.Data.setData` / `getData`, which
+  BetterDiscord does not have (its `Data` API is `save` / `load` / `delete`). The calls went through
+  optional chaining, so nothing was saved, nothing was logged, and disabling the plugin left the
+  overlay off. The plugin now uses `save` / `load` and logs an error if the API is missing.
+- The saved pair is deleted after it is restored. Without that, a fixed save would have revived an
+  old value: restore once, switch the overlay off yourself, enable and disable the plugin again,
+  and the overlay came back on.
+- Tests: the BetterDiscord stub now has only the real `Data` methods (the old one offered
+  `setData` / `getData`, which is why the test passed), a new check covers the second cycle, and
+  every check prints an `ok` line.
+- README rebuilt with a status panel guide, troubleshooting table and test output.
+
 ## v1.1.0 — 2026-10-19
 
 **The out-of-process overlay breaks RTX HDR too, so the plugin now turns the overlay off entirely.**

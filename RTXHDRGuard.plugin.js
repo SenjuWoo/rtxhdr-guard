@@ -2,7 +2,7 @@
  * @name RTXHDRGuard
  * @author SenjuWoo
  * @description Keeps Discord's game overlay switched off so RTX HDR never drops. Re-applies itself when Discord or the overlay toggle turns it back on.
- * @version 1.1.0
+ * @version 1.1.1
  */
 
 /*
@@ -73,6 +73,25 @@ module.exports = class RTXHDRGuard {
             typeof m?.gK === "function" && typeof m?.wR === "function", { searchExports: true });
     }
 
+    /* ---------- saved state ---------- */
+
+    // BetterDiscord's Data API is save/load/delete. 1.1.0 called setData/getData through optional
+    // chaining, which do not exist on BdApi.Data, so nothing was ever saved and disabling the plugin
+    // never gave the user's overlay back. A missing API is now logged, not skipped in silence.
+    remember(key, value) {
+        if (typeof BdApi.Data?.save !== "function") return BdApi.Logger.error(NAME, "BdApi.Data.save missing - cannot remember overlay settings");
+        BdApi.Data.save(NAME, key, value);
+    }
+
+    recall(key) {
+        if (typeof BdApi.Data?.load !== "function") { BdApi.Logger.error(NAME, "BdApi.Data.load missing - cannot restore overlay settings"); return undefined; }
+        return BdApi.Data.load(NAME, key);
+    }
+
+    forget(key) {
+        if (typeof BdApi.Data?.delete === "function") BdApi.Data.delete(NAME, key);
+    }
+
     /* ---------- the fix ---------- */
 
     isSafe(state) {
@@ -93,7 +112,7 @@ module.exports = class RTXHDRGuard {
 
         // Remember the user's own values so stop() can put them back. Only a non-guard state counts,
         // so a forced re-apply never overwrites the original with our own values.
-        if (!this.isSafe(before)) BdApi.Data?.setData?.(NAME, "previous", before);
+        if (!this.isSafe(before)) this.remember("previous", before);
 
         this.applying = true;
         try {
@@ -148,7 +167,7 @@ module.exports = class RTXHDRGuard {
         this.unsub?.();
         this.unsub = null;
 
-        const prev = BdApi.Data?.getData?.(NAME, "previous");
+        const prev = this.recall("previous");
         const store = this.store();
         const dispatch = this.dispatcher();
         if (!prev || !store || !dispatch) return;
@@ -161,6 +180,9 @@ module.exports = class RTXHDRGuard {
         } finally {
             this.applying = false;
         }
+        // Used once: a value left behind would turn the overlay back on at a later disable, after the
+        // user had switched it off themselves while the plugin was off.
+        this.forget("previous");
         BdApi.Logger.info(NAME, "overlay guard removed, settings restored", prev);
     }
 
